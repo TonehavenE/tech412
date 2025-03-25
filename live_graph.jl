@@ -7,7 +7,10 @@ using GLMakie: to_native
 
 return 2 x 2 rotation matrix that rotates plane by angle θ
 """
-rotation(θ) = [cos(θ) -sin(θ); sin(θ) cos(θ)]
+function rotation(θ)
+    c, s = cos(θ), sin(θ)
+    return [c -s; s c]
+end
 
 """
     dihedralgroup(n, flip=true)
@@ -21,7 +24,7 @@ function dihedralgroup(n, flip=true)
     Dn = fill(I, flip ? 2n : n) # allocate an array of 2n or n matrices
     
     for k=1:n
-        Dn[k] = rotation(2(k-1)π/n) # set Dn[k] to rotation by θ = 2(k-1)π/n
+        @views Dn[k] = rotation(2(k-1)π/n) # set Dn[k] to rotation by θ = 2(k-1)π/n
         if flip
             Dn[k+n] = S*Dn[k]       # set Dn[k+n] to reflection of Dn[k]
         end
@@ -36,18 +39,19 @@ Symmetrize a set of data points X by symmetry group G. The return value
 is a matrix containing all columns of X mapped by all matrices in G
 """
 function symmetrize(X, G)
-    m,nX = size(X)  # nX is number of data points
-    nG = length(G)  # nG is number elements in group
-    
-    GX = fill(0.0, m, nX*nG) # allocate a matrix for G applied to X
-    
-    for j in 1:nX      # for each datapoint in X...
-        for k in 1:nG  # ...and for each matrix in the group...
-            GX[:, (j-1)*nG + k] = G[k]*X[:,j] # ...map the jth datapoint by the kth matrix
+    m, nX = size(X)
+    nG = length(G)
+    GX = similar(X, m, nX * nG)  # Preallocate memory
+
+    for j in 1:nX
+        @views Xj = X[:, j]  # Avoid unnecessary indexing
+        for k in 1:nG
+            GX[:, (j-1) * nG + k] = G[k] * Xj
         end
     end
-    GX
+    return GX
 end
+
 
 """
     f(x, X, a=1, k=1)
@@ -65,6 +69,10 @@ function f(x, X, a=1, k=1)
     end
     s/N
 end
+# function f(x, X, a=1, k=1)
+#     r = @views norm.(eachcol(X) .- x)  # Compute all norms at once
+#     return sum(cos.(k .* r) .* exp.(-a .* r.^2)) / size(X, 2)
+# end
 
 """
     plotpattern(n, flip, X, a, k, width, levels, colormap)    
@@ -103,74 +111,68 @@ Create an animation with sliders.
 function animation_with_sliders()
     w = 400
     fps = 60
-    nframes = 240
-    time = 0
     polygon = 5
-    a0 = 3    # scale of blobs (larger a, narrower blobs)
-    k0 = 5    # scale of ripples (larger k, more rapid ripples)
-    s = 3     # scale of data points (larger s, further spread out)
-	Npts = 3
-	width = 3
-	flip = true
-	levels = -1:.3:1  # number or values of contour levels
+    a0 = 3
+    k0 = 5
+    s = 3
+    Npts = 3
+    width = 3
+    flip = true
+    levels = -1:.3:1
 
-	X = randn(2, Npts)
-	dt = pi/512
-	t = 0:dt:2pi
+    X = randn(2, Npts)
+    Xt = copy(X)
+	Nx = size(X, 2)
+    time = 0
+    dt = pi / 512
 
-	# some choices for rotation rates
-	#ω = 1.5*(2*rand(Npts).-1) # random rotation rates for data points 
-	#ω = ω .- sum(ω)/Npts      # remove mean rotation
-	#ω = rand(Int, Npts) .% 6 .+ 1
+	# movement functions
+	a(a0, t) = a0*(1 .- 2/3*cos.(t))
+	k(k0, t) = k0*(1 .- 2/3*cos.(2*t));
+
 	ω = (rand(Int,Npts) .% 4 .+ 1).* (-1).^(rand(Int,Npts) .% 2)
 	if !flip
 	    ω = ω .- sum(ω)/Npts      # remove mean rotation
 	end
 
-	a(a0, t) = a0*(1 .- 2/3*cos.(t))
-	k(k0, t) = k0*(1 .- 2/3*cos.(2*t));
+    R = rotation.(ω * dt)  # Precompute rotation matrices
 
-	R = rotation.(ω*dt)   # vector of incremental rotation matrices, one for each data point
- 
-    Nx = size(X,2)
-    Xt = copy(X)
-    
-	# create figure
-	fig = Figure(size=(1920, 1080))
-    ax = Axis(fig[1, 1], aspect = 1, xgridvisible = false, ygridvisible = false)
+    # Create figure
+    fig = Figure(size=(1920, 1080))
+    ax = Axis(fig[1, 1], aspect=1, xgridvisible=false, ygridvisible=false)
     display(fig)
-	
-	# enable quitting
-	glfw_window = to_native(display(fig))
 
-	on(events(fig).keyboardbutton) do event
-    	if event.key == Keyboard.q
-      		GLFW.SetWindowShouldClose(glfw_window, true) # this will close the window after all callbacks are finished
-		end
+    # Enable quitting
+    glfw_window = to_native(display(fig))
+    on(events(fig).keyboardbutton) do event
+        if event.key == Keyboard.q
+            GLFW.SetWindowShouldClose(glfw_window, true)
+        end
     end
 
-    # Define slider grid
+    # Sliders
     slider_grid = SliderGrid(
         fig[2, 1], 
-        (label = "a0", range = 0:0.01:10, startvalue = 3),
-        (label = "k0", range = 0:0.01:10, startvalue = 5),
-        (label = "Polygon", range = 0:1:10, startvalue = 5),
+        (label="a0", range=0:0.01:10, startvalue=3),
+        (label="k0", range=0:0.01:10, startvalue=5),
+        (label="Polygon", range=0:1:10, startvalue=5),
     )
     sliderobservables = [s.value for s in slider_grid.sliders]
 
-    # Define colormap menu
-    colormap_options = ["viridis", "plasma", "inferno", "magma", "coolwarm", "turbo"]
-    menu = Menu(fig[3, 1], options=colormap_options, default="viridis")
-    selected_colormap = menu.selection  # Observable storing the selected colormap
+    # Colormap menu
+    menu = Menu(fig[3, 1], options=["viridis", "plasma", "inferno", "magma", "coolwarm", "turbo"], default="viridis")
+    selected_colormap = menu.selection
 
 
-    # for i = 1:nframes
-	while true
-        a0, k0, polygon = sliderobservables[1][], sliderobservables[2][], sliderobservables[3][]
-        plotpattern!(ax, polygon, flip, Xt, a(a0, time), k(k0, time), width, levels, selected_colormap[])
-        time += 1/fps
-        sleep(1/fps)
+    while !GLFW.WindowShouldClose(glfw_window)
+		# println("plotting new frame")
+        a0, k0, polygon = (s[] for s in sliderobservables)
+			plotpattern!(ax, polygon, flip, Xt, a(a0, time), k(k0, time), width, levels, selected_colormap[])
+        time += 1 / fps
+        sleep(1 / fps)
 
+        # @views Xt .= R .* Xt  # In-place rotation
+		# Xt .= R .* Xt
 		for j=1:Nx
 			Xt[:, j] = R[j]*Xt[:, j]
 		end
@@ -178,5 +180,6 @@ function animation_with_sliders()
 
     return fig
 end
+
 
 animation_with_sliders()
