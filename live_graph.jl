@@ -258,15 +258,19 @@ function observable_animation()
     display(fig)
 
     # Update the observable zgrid whenever the time or parameters change
-	nframes = 1000
+	nframes = 100
 	time = 0
 	for i = 1:nframes
+		if GLFW.WindowShouldClose(glfw_window)
+			break
+		end
         a0, k0, polygon = (s[] for s in sliderobservables)
         # Calculate new pattern
-        new_zgrid = compute_pattern(Xt, a(a0, time), k(k0, time), width, polygon, flip)
+        @time new_zgrid = compute_pattern(Xt, a(a0, time), k(k0, time), width, polygon, flip)
 
         # Update zgrid observable
         zgrid[] = new_zgrid
+	println("new frame")
 
 		sleep(1/fps)
 		time += 1/fps
@@ -274,4 +278,4 @@ function observable_animation()
 end
 
 # animation_with_sliders()
-observable_animation()
+# observable_animation()
