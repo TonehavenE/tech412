@@ -205,7 +205,7 @@ function animation_with_sliders()
 
 	# create figure
 	fig = Figure(size=(1920, 1080))
-    ax = Axis(fig[1, 1], aspect = 1, xgridvisible = false, ygridvisible = false)
+    ax = Axis(fig[1, 1], xgridvisible = false, ygridvisible = false, xticks=(), yticks=(), xlabel="", ylabel="")  # Disable grid, ticks, and labels
 
 	port = SerialPort("/dev/ttyACM0", 9600)
 	sensor_data = Observable(Packet(0, 0, 0, 0, 0, 0))
