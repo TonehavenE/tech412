@@ -89,7 +89,6 @@ function compute_pattern(X, a, k, w, n, flip)
     x2grid = range(-w, w, length=100)
 
     # Generate zgrid based on the input data and current parameters
-    println("timing zgrid")
     zgrid = generate_zgrid(Xsymm, a, k, x1grid, x2grid)
     zscale = maximum(abs.(zgrid))
 
@@ -170,7 +169,6 @@ function observable_animation()
 
         # Update zgrid observable
         zgrid[] = new_zgrid
-	println("new frame")
 
 		sleep(1/fps)
 		time += 1/fps

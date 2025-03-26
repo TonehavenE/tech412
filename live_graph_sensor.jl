@@ -1,6 +1,7 @@
 using LinearAlgebra, GLMakie, GLMakie.GLFW, SerialPorts
 using GLMakie: to_native
 using Statistics
+using Base.Threads
 
 struct Packet
     temperature_sht30::Float64
@@ -72,7 +73,10 @@ end
 
 return 2 x 2 rotation matrix that rotates plane by angle θ
 """
-rotation(θ) = [cos(θ) -sin(θ); sin(θ) cos(θ)]
+function rotation(θ)
+    c, s = cos(θ), sin(θ)
+    return [c -s; s c]
+end
 
 """
     dihedralgroup(n, flip=true)
@@ -86,7 +90,7 @@ function dihedralgroup(n, flip=true)
     Dn = fill(I, flip ? 2n : n) # allocate an array of 2n or n matrices
     
     for k=1:n
-        Dn[k] = rotation(2(k-1)π/n) # set Dn[k] to rotation by θ = 2(k-1)π/n
+        @views Dn[k] = rotation(2(k-1)π/n) # set Dn[k] to rotation by θ = 2(k-1)π/n
         if flip
             Dn[k+n] = S*Dn[k]       # set Dn[k+n] to reflection of Dn[k]
         end
@@ -101,18 +105,19 @@ Symmetrize a set of data points X by symmetry group G. The return value
 is a matrix containing all columns of X mapped by all matrices in G
 """
 function symmetrize(X, G)
-    m,nX = size(X)  # nX is number of data points
-    nG = length(G)  # nG is number elements in group
-    
-    GX = fill(0.0, m, nX*nG) # allocate a matrix for G applied to X
-    
-    for j in 1:nX      # for each datapoint in X...
-        for k in 1:nG  # ...and for each matrix in the group...
-            GX[:, (j-1)*nG + k] = G[k]*X[:,j] # ...map the jth datapoint by the kth matrix
+    m, nX = size(X)
+    nG = length(G)
+    GX = similar(X, m, nX * nG)  # Preallocate memory
+
+    for j in 1:nX
+        @views Xj = X[:, j]  # Avoid unnecessary indexing
+        for k in 1:nG
+            GX[:, (j-1) * nG + k] = G[k] * Xj
         end
     end
-    GX
+    return GX
 end
+
 
 """
     f(x, X, a=1, k=1)
@@ -122,44 +127,36 @@ return 1/N sum_j cos(k|x-xj|) exp(-a|x-xj|^2) where
   xj is the jth column of 2 x N matrix X
 """
 function f(x, X, a=1, k=1)
-    s = 0.0
-    N = size(X, 2)
-    for j in 1:N
-        r = norm(x-X[:,j])
-        s += cos(k*r)*exp(-a*(r^2))
-    end
-    s/N
+	norms = vec(norm.(eachcol(X .- x)))
+	return sum(cos.(k .* norms) .* exp.(-a .* norms.^2))/ size(X, 2)
 end
 
-"""
-    plotpattern(n, flip, X, a, k, width, levels, colormap)    
-     
-Generate a symmetric pattern based on 
-  n : use symmetry group of n-gon
-  flip : boolean, use / don't use reflection symmetries
-  X : 2 x N matrix of data points, each column of X is a point in the plane 
-  a : scale of blobs, exp(-a r^2)
-  k : scale of oscillations, cos(k r^2)
-  width : width and height of plot axes
-  levels : number or values of contour levels
-  colormap : colormap for contour plot     
-"""
-function plotpattern!(ax, n, flip, X, a, k, width, levels, colormap)
-    w = width
-    # define our groups and points
+function generate_zgrid(Xsymm, a, k, x1grid, x2grid)
+	N1 = length(x1grid)
+	N2 = length(x2grid)
+	zgrid = zeros(N1, N2)
+
+	@threads for i in 1:N1
+		for j in 1:N2
+			x = [x1grid[i]; x2grid[j]]
+			zgrid[i, j] = f(x, Xsymm, a, k)
+		end
+	end
+	return zgrid
+end
+
+function compute_pattern(X, a, k, w, n, flip)	
     G = dihedralgroup(n, flip)
     Xsymm = symmetrize(X, G)
 
-    # evaluate f(x, Xsymm, a, k) over a grid of points x=[x1;x2]
-    
     x1grid = range(-w, w, length=100)
     x2grid = range(-w, w, length=100)
-    # symmetrize the data points X with the symmetries of the n-gon
-    zgrid = [f([x1;x2], Xsymm, a, k) for x2 in x2grid, x1 in x1grid]
+
+    # Generate zgrid based on the input data and current parameters
+    zgrid = generate_zgrid(Xsymm, a, k, x1grid, x2grid)
     zscale = maximum(abs.(zgrid))
-    # make a contour plot of zgrid = f(x, Xsymm, a, k)
-    empty!(ax)
-    contourf!(ax, x1grid, x2grid, zgrid/zscale, colormap=colormap, levels=levels)
+
+    return zgrid / zscale
 end
 
 
@@ -185,8 +182,9 @@ function animation_with_sliders()
 	levels = -1:.3:1  # number or values of contour levels
 
 	X = randn(2, Npts)
+    Nx = size(X,2)
+    Xt = copy(X)
 	dt = pi/512
-	t = 0:dt:2pi
 
 	# some choices for rotation rates
 	#ω = 1.5*(2*rand(Npts).-1) # random rotation rates for data points 
@@ -197,28 +195,18 @@ function animation_with_sliders()
 	    ω = ω .- sum(ω)/Npts      # remove mean rotation
 	end
 	println(ω)
+	R = rotation.(ω*dt)   # vector of incremental rotation matrices, one for each data point
+
 
 	a(a0, t) = a0*(1 .- 2/3*cos.(t))
 	k(k0, t) = k0*(1 .- 2/3*cos.(2*t));
 
-	R = rotation.(ω*dt)   # vector of incremental rotation matrices, one for each data point
- 
-    Nx = size(X,2)
-    Xt = copy(X)
-    
+    zgrid = Observable(fill(0.0, 100, 100))  # Placeholder, will be updated with actual data
+
 	# create figure
 	fig = Figure(size=(1920, 1080))
     ax = Axis(fig[1, 1], aspect = 1, xgridvisible = false, ygridvisible = false)
-    display(fig)
-	
-	# enable quitting
-	glfw_window = to_native(display(fig))
 
-	on(events(fig).keyboardbutton) do event
-    	if event.key == Keyboard.q
-      		GLFW.SetWindowShouldClose(glfw_window, true) # this will close the window after all callbacks are finished
-		end
-    end
 	port = SerialPort("/dev/ttyACM0", 9600)
 	sensor_data = Observable(Packet(0, 0, 0, 0, 0, 0))
 	serial_task = Threads.@spawn read_serial(port, sensor_data)
@@ -236,8 +224,14 @@ function animation_with_sliders()
     colormap_options = ["viridis", "plasma", "inferno", "magma", "coolwarm", "turbo"]
     menu = Menu(fig[3, 1], options=colormap_options, default="viridis")
     selected_colormap = menu.selection  # Observable storing the selected colormap
+    contourf!(ax, range(-w, w, length=100), range(-w, w, length=100), zgrid, colormap=selected_colormap[], levels=levels)
 
-
+    glfw_window = to_native(display(fig))
+    on(events(fig).keyboardbutton) do event
+        if event.key == Keyboard.q
+            GLFW.SetWindowShouldClose(glfw_window, true)
+        end
+    end
     # for i = 1:nframes
 	history_packets = []
 	window_size = 4
@@ -245,7 +239,7 @@ function animation_with_sliders()
 	polygon = 5
 	a0 = 0
 	k0 = 0
-	while true
+	while !GLFW.WindowShouldClose(glfw_window)
         _, _, _ = sliderobservables[1][], sliderobservables[2][], sliderobservables[3][]
 		if pkt != sensor_data[]
 			pkt = sensor_data[]
@@ -273,12 +267,15 @@ function animation_with_sliders()
 			println("K0: $k0")
 			println("ω: $ω")
 		end
-        plotpattern!(ax, polygon, flip, Xt, a(a0, time), k(k0, time), width, levels, selected_colormap[])
-        time += 1/fps
-        sleep(1/fps)
+        new_zgrid = compute_pattern(Xt, a(a0, time), k(k0, time), width, polygon, flip)
+
+        # Update zgrid observable
+        zgrid[] = new_zgrid
+
+		sleep(1/fps)
+		time += 1/fps
 
 		for j=1:Nx
-			# Xt[:, j] = R[j]*Xt[:, j]
 			Xt[:, j] = rotation.(ω * dt)[j]*Xt[:, j]
 		end
     end
