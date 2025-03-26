@@ -211,20 +211,8 @@ function animation_with_sliders()
 	sensor_data = Observable(Packet(0, 0, 0, 0, 0, 0))
 	serial_task = Threads.@spawn read_serial(port, sensor_data)
 
-    # Define slider grid
-    slider_grid = SliderGrid(
-        fig[2, 1], 
-        (label = "a0", range = 0:0.01:10, startvalue = 3),
-        (label = "k0", range = 0:0.01:10, startvalue = 5),
-        (label = "Polygon", range = 0:1:10, startvalue = 5),
-    )
-    sliderobservables = [s.value for s in slider_grid.sliders]
-
-    # Define colormap menu
-    colormap_options = ["viridis", "plasma", "inferno", "magma", "coolwarm", "turbo"]
-    menu = Menu(fig[3, 1], options=colormap_options, default="viridis")
-    selected_colormap = menu.selection  # Observable storing the selected colormap
-    contourf!(ax, range(-w, w, length=100), range(-w, w, length=100), zgrid, colormap=selected_colormap[], levels=levels)
+    selected_colormap = "viridis"
+    contourf!(ax, range(-w, w, length=100), range(-w, w, length=100), zgrid, colormap=selected_colormap, levels=levels)
 
     glfw_window = to_native(display(fig))
     on(events(fig).keyboardbutton) do event
@@ -240,7 +228,6 @@ function animation_with_sliders()
 	a0 = 0
 	k0 = 0
 	while !GLFW.WindowShouldClose(glfw_window)
-        _, _, _ = sliderobservables[1][], sliderobservables[2][], sliderobservables[3][]
 		if pkt != sensor_data[]
 			pkt = sensor_data[]
 			push!(history_packets, pkt)
